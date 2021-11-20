@@ -16,7 +16,7 @@ services:
     command: dgraph alpha --my=dgraph-alpha:7080 --zero=dgraph-zero:5080
   backend:
     ports:
-      - '80:80'
+      - '3001:3001'
     environment:
       - DGRPAH_URL="dgraph-alpha:8080"
     image: unigraph
@@ -24,3 +24,10 @@ services:
     depends_on:
       - dgraph-zero
       - dgraph-alpha
+  frontend:
+    ports:
+      - '3000:3000'
+    image: unigraph
+    command: yarn explorer-start
+    depends_on:
+      - backend
