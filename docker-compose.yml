@@ -1,0 +1,26 @@
+version: '3.3'
+services:
+  dgraph-zero:
+    ports:
+      - '5080:5080'
+      - '6080:6080'
+    restart: unless-stopped
+    image: dgraph
+    command: dgraph zero --my=dgraph-zero:5080
+  dgraph-alpha:
+    ports:
+      - '9080:9080'
+      - '8080:8080'
+    restart: unless-stopped
+    image: dgraph
+    command: dgraph alpha --my=dgraph-alpha:7080 --zero=dgraph-zero:5080
+  backend:
+    ports:
+      - '80:80'
+    environment:
+      - DGRPAH_URL="dgraph-alpha:8080"
+    image: unigraph
+    command: yarn backend-start
+    depends_on:
+      - dgraph-zero
+      - dgraph-alpha
