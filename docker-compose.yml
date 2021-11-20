@@ -5,21 +5,21 @@ services:
       - '5080:5080'
       - '6080:6080'
     restart: unless-stopped
-    image: dgraph
+    image: ebdm/unigraph-dgraph
     command: dgraph zero --my=dgraph-zero:5080
   dgraph-alpha:
     ports:
       - '9080:9080'
       - '8080:8080'
     restart: unless-stopped
-    image: dgraph
+    image: ebdm/unigraph-dgraph
     command: dgraph alpha --my=dgraph-alpha:7080 --zero=dgraph-zero:5080
   backend:
     ports:
       - '3001:3001'
     environment:
       - DGRPAH_URL="dgraph-alpha:8080"
-    image: unigraph
+    image: ebdm/unigraph
     command: yarn backend-start
     depends_on:
       - dgraph-zero
@@ -27,7 +27,7 @@ services:
   frontend:
     ports:
       - '3000:3000'
-    image: unigraph
+    image: ebdm/unigraph
     command: yarn explorer-start
     depends_on:
       - backend
