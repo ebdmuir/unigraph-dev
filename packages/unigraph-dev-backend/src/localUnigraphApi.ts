@@ -1,4 +1,4 @@
-import { buildGraph, getRandomInt } from "unigraph-dev-common/lib/api/unigraph";
+import { buildGraph, getRandomInt } from "unigraph-dev-common/lib/utils/utils";
 import { Unigraph } from "unigraph-dev-common/lib/types/unigraph";
 import { processAutorefUnigraphId, makeQueryFragmentFromType, clearEmpties, buildUnigraphEntity, processAutoref, getUpsertFromUpdater, flatten, unflatten, unpad } from "unigraph-dev-common/lib/utils/entityUtils";
 import { UnigraphUpsert } from "./custom";
@@ -144,6 +144,7 @@ export function getLocalUnigraphAPI(client: DgraphClient, states: {caches: Recor
             return res;
         },
         deleteObject: async (uid, permanent) => {
+            if (uid.startsWith('$/') && states.namespaceMap[uid]) uid = states.namespaceMap[uid].uid;
             permanent ? await client.deleteUnigraphObjectPermanently(uid) : await client.deleteUnigraphObject(uid);
             callHooks(states.hooks, "after_object_changed", {subscriptions: states.subscriptions, caches: states.caches})
         },
@@ -253,7 +254,7 @@ export function getLocalUnigraphAPI(client: DgraphClient, states: {caches: Recor
         importObjects: async (objects) => {return Error('Not implemented')},
         runExecutable: async (uid: string, params: any, context?: ExecContext) => {
             const exec = uid.startsWith("0x") ? unpad((await client.queryUID(uid))[0]) : states.caches["executables"].data[uid];
-            const execFn = await buildExecutable(exec, {"params": params, "definition": exec, ...context}, states.localApi);
+            const execFn = await buildExecutable(exec, {"params": params, "definition": exec, ...context}, states.localApi, states);
             let ret;
             if (typeof execFn === "function") {
                 ret = execFn()

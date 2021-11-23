@@ -16,7 +16,7 @@ import fetch from 'node-fetch';
 import { uniqueId } from 'lodash';
 import { createExecutableCache } from './executableManager';
 import { getLocalUnigraphAPI } from './localUnigraphApi';
-import { getRandomInt } from 'unigraph-dev-common/lib/api/unigraph';
+import { getRandomInt } from 'unigraph-dev-common/lib/utils/utils';
 import { addNotification } from './notifications';
 import { Unigraph } from 'unigraph-dev-common/lib/types/unigraph';
 import stringify from 'json-stable-stringify';
@@ -56,7 +56,7 @@ export default async function startServer(client: DgraphClient) {
     }
   }
 
-  let serverStates: any = {};
+  const serverStates: any = {};
 
   const hooks: Hooks = {
     "after_subscription_added": [async (context: HookAfterSubscriptionAddedParams) => {
@@ -81,14 +81,35 @@ export default async function startServer(client: DgraphClient) {
 
   let namespaceMap: any = {}
 
-  serverStates = {
+  Object.assign(serverStates, {
     caches: caches,
     subscriptions: _subscriptions,
     hooks: hooks,
     namespaceMap: namespaceMap,
     localApi: {} as Unigraph,
-    httpCallbacks: {}
-  }
+    httpCallbacks: {},
+    runningExecutables: [],
+    addRunningExecutable: (defn: any) => {
+      serverStates.runningExecutables.push(defn);
+      Object.values(connections).forEach(el => {
+        el.send(stringify({
+          "type": "cache_updated",
+          "name": "runningExecutables",
+          result: serverStates.runningExecutables
+        }))
+      })
+    },
+    removeRunningExecutable: (id: any) => {
+      serverStates.runningExecutables = serverStates.runningExecutables.filter((el: any) => el.id !== id);
+      Object.values(connections).forEach(el => {
+        el.send(stringify({
+          "type": "cache_updated",
+          "name": "runningExecutables",
+          result: serverStates.runningExecutables
+        }))
+      })
+    }
+  })
 
   const namespaceSub = createSubscriptionLocal(getRandomInt(), (data) => {
     namespaceMap = data[0];
@@ -427,6 +448,8 @@ export default async function startServer(client: DgraphClient) {
       ws.send(makeResponse(event, true, {result: res}))
     }
   };
+
+  await Promise.all(Object.values(caches).map((el: Cache<any>) => el.updateNow()));
 
   const server = new WebSocket.Server({
     port: PORT,

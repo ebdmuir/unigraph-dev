@@ -7,7 +7,7 @@ import { ViewViewDetailed } from "../../components/ObjectView/DefaultObjectView"
 import _ from "lodash";
 import { buildGraph } from "unigraph-dev-common/lib/api/unigraph";
 import { Actions } from "flexlayout-react";
-import { addChild, convertChildToTodo, focusLastDFSNode, focusNextDFSNode, indentChild, setCaret, setFocus, splitChild, unindentChild, unsplitChild } from "./commands";
+import { addChild, convertChildToTodo, focusLastDFSNode, focusNextDFSNode, indentChild, setCaret, setFocus, splitChild, unindentChild, unsplitChild, replaceChildWithUid } from "./commands";
 import { onUnigraphContextMenu } from "../../components/ObjectView/DefaultObjectContextMenu";
 import { FiberManualRecord, MoreVert } from "@material-ui/icons";
 import { setSearchPopup } from "./searchPopup";
@@ -31,7 +31,7 @@ export const NoteBlock = ({ data }: any) => {
     const [subentities, otherChildren] = getSubentities(data);
     const unpadded = unpad(data);
 
-    return <div onClick={() => { window.wsnavigator(`/library/object?uid=${data.uid}`) }} style={{display: "flex", alignItems: "center", width: "100%"}}>
+    return <div onClick={() => { window.wsnavigator(`/library/object?uid=${data.uid}&isStub=true&type=$/schema/note_block`) }} style={{display: "flex", alignItems: "center", width: "100%"}}>
         <div style={{flexGrow: 1}}>
             <Typography variant="body1">{unpadded.text}</Typography>
             <Typography variant="body2" color="textSecondary">{subentities.length ? " and " + subentities.length + " children" : " no children"}</Typography>
@@ -56,6 +56,7 @@ const noteBlockCommands = {
     "indent-child": indentChild,
     "unindent-child": unindentChild,
     "convert-child-to-todo": convertChildToTodo,
+    "replace-child-with-uid": replaceChildWithUid,
 }
 
 export const PlaceholderNoteBlock = ({ callbacks }: any) => {
@@ -127,6 +128,8 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
         edited, setCommand, childrenref, callbacks, nodesState
     }
 
+    
+
     //console.log(data);
 
     const [isChildrenCollapsed, setIsChildrenCollapsed] = React.useState<any>({});
@@ -162,27 +165,40 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
         <div style={{ width: "100%", }} ref={boxRef} >
             <NoteViewTextWrapper 
                 isRoot={!isChildren} onContextMenu={(event: any) => onUnigraphContextMenu(event, data, undefined, callbacks)} 
-                semanticChildren={buildGraph(otherChildren).filter((el: any) => el.type).map((el: any) => <AutoDynamicView object={el} style={{width: "unset"}}/>)}
+                semanticChildren={buildGraph(otherChildren).filter((el: any) => el.type).map((el: any) => <AutoDynamicView object={el.type?.['unigraph.id'] === "$/schema/note_block" ? el : {uid: el.uid, type: el.type}} style={{width: "unset"}}/>)}
             >
-                <div onClick={(ev) => {
+                <div onPointerUp={(ev) => {
                     if (!isEditing) {
                         setIsEditing(true);
                         const caretPos = Number((ev.target as HTMLElement).getAttribute("markdownPos") || 0);
-
                         setTimeout(() => {
-                            textInput.current?.focus()
-
                             if (textInput.current.firstChild) {
                                 setCaret(document, textInput.current.firstChild, caretPos || textInput.current?.textContent?.length)
+                            } else {
+                                setCaret(document, textInput.current, 0);
                             }
                         }, 0)
                     }
-                }} onBlur={(ev) => { setIsEditing(false); inputDebounced.current.flush(); }} style={{ width: "100%" }}>
+                }} onClick={(ev) => {
+                    if (!isEditing) {
+                        setIsEditing(true);
+                        const caretPos = Number((ev.target as HTMLElement).getAttribute("markdownPos") || 0);
+                        setTimeout(() => {
+                            if (textInput.current.firstChild) {
+                                setCaret(document, textInput.current.firstChild, caretPos || textInput.current?.textContent?.length)
+                            } else {
+                                setCaret(document, textInput.current, 0);
+                            }
+                        }, 0)
+                    }
+                }}
+                onBlur={(ev) => { setIsEditing(false); inputDebounced.current.flush(); }} style={{ width: "100%" }}>
 
                     {(isEditing) ? <Typography
                         variant={isChildren ? "body1" : "h4"}
                         onContextMenu={isChildren ? undefined : (event) => onUnigraphContextMenu(event, data, undefined, callbacks)}
                         contentEditable={true}
+                        style={{outline: "0px solid transparent"}}
                         suppressContentEditableWarning={true}
                         ref={textInput}
                         onInput={(ev) => {
@@ -192,6 +208,7 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
                             const caret = (document.getSelection()?.anchorOffset) as number;
                             // Check if inside a reference block
                             const placeholder = /\[\[([^[\]]*)\]\]/g;
+                            const placeholder2 = /\(\(([^[\)]*)\)\)/g;
 
                             let hasMatch = false;
                             for (let match: any; (match = placeholder.exec(textInput.current.textContent)) !== null;) {
@@ -227,6 +244,15 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
                                     })
                                 }
                             }
+                            for (let match: any; (match = placeholder2.exec(textInput.current.textContent)) !== null;) {
+                                if (match.index <= caret && placeholder2.lastIndex >= caret) {
+                                    hasMatch = true;
+                                    setSearchPopup(boxRef, match[1], async (newName: string, newUid: string) => {
+                                        callbacks['replace-child-with-uid'](newUid);
+                                        window.unigraph.getState('global/searchPopup').setValue({ show: false });
+                                    })
+                                }
+                            }
                             if (!hasMatch) window.unigraph.getState('global/searchPopup').setValue({ show: false })
 
                             textref.current = ev.currentTarget.textContent;
@@ -255,7 +281,7 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
 
                                 case 'Backspace':
                                     //console.log(caret, document.getSelection()?.type)
-                                    if (caret === 0 && document.getSelection()?.type === "Caret" && !(textref.current || data.get('text').as('primitive')).length) {
+                                    if (caret === 0 && document.getSelection()?.type === "Caret" && !(textref.current).length) {
                                         ev.preventDefault();
                                         //inputDebounced.cancel();
                                         edited.current = false;
@@ -288,6 +314,19 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
                                     }
                                     break;
 
+                                case 'Digit9':
+                                    if (ev.shiftKey) {
+                                        ev.preventDefault();
+                                        //console.log(document.getSelection())
+                                        let middle = document.getSelection()?.toString() || "";
+                                        let end = "";
+                                        if (middle.endsWith(' ')) { middle = middle.slice(0, middle.length - 1); end = " "; }
+                                        document.execCommand('insertText', false, '(' + middle + ')' + end);
+                                        //console.log(caret, document.getSelection(), middle)
+                                        setCaret(document, textInput.current.firstChild, caret + 1, middle.length)
+                                    }
+                                    break;
+
                                 default:
                                     //console.log(ev);
                                     break;
@@ -310,11 +349,12 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
             {!(isCollapsed === true) ? <div ref={childrenref} style={{ width: "100%" }} >
                 {(subentities.length || isChildren) ? buildGraph(subentities).map((el: any, elindex) => {
                     const isCol = isChildrenCollapsed[el.uid];
+                    console.log(el.type);
                     return <OutlineComponent key={el.uid} isChildren={isChildren} collapsed={isCol} setCollapsed={(val: boolean) => setIsChildrenCollapsed({ ...isChildrenCollapsed, [el.uid]: val })}
                         createBelow={() => { addChild(dataref.current, editorContext) }}
                     >
                         <AutoDynamicView
-                            object={el}
+                            object={el.type?.['unigraph.id'] === "$/schema/note_block" ? el : {uid: el.uid, type: el.type}}
                             callbacks={{
                                 "get-view-id": () => options?.viewId, // only used at root
                                 ...callbacks,
