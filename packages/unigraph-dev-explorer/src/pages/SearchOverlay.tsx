@@ -1,15 +1,28 @@
 import { Card, Divider, InputBase, TextField, Typography } from "@material-ui/core";
 import _ from "lodash";
 import React from "react"
+import { AppState } from "unigraph-dev-common/lib/types/unigraph";
 import { buildUnigraphEntity } from "unigraph-dev-common/lib/utils/entityUtils";
 import { UnigraphObject } from "unigraph-dev-common/lib/utils/utils";
 import { AutoDynamicView } from "../components/ObjectView/AutoDynamicView";
 import { DynamicObjectListView } from "../components/ObjectView/DynamicObjectListView";
 import { parseQuery } from "../components/UnigraphCore/UnigraphSearch";
+import { isElectron } from "../utils";
 
-export const SearchOverlay = ({open, setClose}: any) => {
+export const SearchOverlayTooltip = () => {
+    return <div style={{marginTop: "16px"}}>
+        <Typography style={{color: "gray"}}>Add an item</Typography>
+        <Typography>+todo / +td : add todo item</Typography>
+        <Typography>+note / +n : create new note page and start editing</Typography>
+        <Typography>+bookmark / +bm : add bookmark from URL</Typography>
+        <Typography style={{color: "gray"}}>Search Unigraph</Typography>
+        <Typography>?&lt;search query&gt; : search Unigraph</Typography>
+    </div>
+}
+
+export const SearchOverlay = ({open, setClose, callback, summonerTooltip, defaultValue}: any) => {
     const tf = React.useRef<HTMLDivElement | null>(null);
-    const [input, setInput] = React.useState("");
+    const [input, setInput] = React.useState(defaultValue || "");
     const [parsed, setParsed] = React.useState<any>({});
     const [query, setQuery] = React.useState<any[]>([]);
 
@@ -22,6 +35,10 @@ export const SearchOverlay = ({open, setClose}: any) => {
     React.useEffect(() => { 
         tf.current?.focus();
     }, [open])
+
+    React.useEffect(() => {
+        if (typeof defaultValue === "string") setInput(defaultValue);
+    }, defaultValue)
 
     React.useEffect(() => {
         if (input.startsWith("+")) {
@@ -58,7 +75,7 @@ export const SearchOverlay = ({open, setClose}: any) => {
     React.useEffect(() => {
         if (parsed?.type === "quickAdder") {
             const allAdders = window.unigraph.getState('registry/quickAdder').value;
-            allAdders[parsed?.key](parsed?.value).then((res: any) => {
+            allAdders[parsed?.key].adder(parsed?.value).then((res: any) => {
                 const [object, type] = res;
                 console.log(JSON.stringify(object))
                 window.unigraph.getSchemas().then((schemas: any) => {
@@ -104,13 +121,16 @@ export const SearchOverlay = ({open, setClose}: any) => {
             placeholder={"Enter: +<type shortname> to create; ?<search query> to search; <command> to execute command"}
             onKeyPress={async (ev) => {
                 if (ev.key === "Enter" && parsed?.type === "quickAdder" && window.unigraph.getState('registry/quickAdder').value[parsed?.key]) {
-                    await window.unigraph.getState('registry/quickAdder').value[parsed?.key](JSON.parse(JSON.stringify(parsed?.value)), false);
+                    window.unigraph.getState('registry/quickAdder').value[parsed?.key]?.adder(JSON.parse(JSON.stringify(parsed?.value)), false).then((uids: any[]) => {
+                        if (callback && uids[0]) callback(uids[0])
+                    });
                     setInput('');
                     setClose();
                 }
             }}
         />
         <div>
+            {summonerTooltip ? <Typography>{summonerTooltip}</Typography> : []}
             {parsed?.type === "quickAdder" ? <Typography>
                 {"Adding " + parsed?.key + " (Enter to add)"}
             </Typography> : []}
@@ -121,33 +141,60 @@ export const SearchOverlay = ({open, setClose}: any) => {
                 buildGraph={true}
                 noBar
             /> : []}
+            {entries.length + entities.length === 0 ? <SearchOverlayTooltip /> : []}
+            {parsed?.type === "quickAdder" ? <div style={{marginTop: "32px"}}>
+                {React.createElement(window.unigraph.getState('registry/quickAdder').value[parsed?.key].tooltip)}
+            </div> : []}
         </div>
     </div>
 }
 
-export const SearchOverlayPopover = () => {
+type OmnibarSummonerType = {
+    show: boolean,
+    tooltip: string,
+    callback: any,
+    defaultValue: string
+}
+
+export const SearchOverlayPopover = ({open, setClose, noShadow}: any) => {
     const [searchEnabled, setSearchEnabled] = React.useState(false);
+    const [summonerState, setSummonerState] = React.useState<Partial<OmnibarSummonerType>>({});
     const overlay = React.useRef(null);
 
+    const omnibarSummoner: AppState<Partial<OmnibarSummonerType>> = window.unigraph.getState('global/omnibarSummoner');
+    
     React.useEffect(() => {
-        document.onkeydown = function(evt) {
+        omnibarSummoner.subscribe((v) => {
+            console.log(v);
+            setSummonerState(v);
+            if (v?.show) setSearchEnabled(true);
+            else setSearchEnabled(false);
+        });
+    }, [])
+
+    React.useEffect(() => {
+        if (!searchEnabled && omnibarSummoner.value?.show) {
+            omnibarSummoner.setValue({});
+            console.log(window.unigraph.getState('global/omnibarSummoner'));
+        }
+        if (!isElectron()) document.onkeydown = function(evt) {
             evt = evt || window.event;
             if ((evt.ctrlKey || evt.metaKey) && evt.key === 'e') {
-                setSearchEnabled(!searchEnabled);
+                if (open === undefined) setSearchEnabled(!searchEnabled);
             }
-            if (searchEnabled && evt.key === 'Escape') {
-                setSearchEnabled(false);
+            if ((open || searchEnabled) && evt.key === 'Escape') {
+                setClose ? setClose() : setSearchEnabled(false);
             }
         };
     }, [searchEnabled])
 
     React.useEffect(() => {
-        if (searchEnabled) {
+        if (open || searchEnabled) {
             const listener = (event: MouseEvent) => {
                 const withinBoundaries = overlay && event.composedPath().includes((overlay as any).current)
                 
                 if (!withinBoundaries) {
-                    setSearchEnabled(false);
+                    setClose ? setClose() : setSearchEnabled(false);
                     document.removeEventListener('click', listener)
                 } 
             }
@@ -156,7 +203,7 @@ export const SearchOverlayPopover = () => {
     }, [searchEnabled])
 
     return <Card
-    elevation={12} 
+    elevation={noShadow ? 0 : 12} 
         style={{
             zIndex: 99,
             position: "absolute",
@@ -168,10 +215,13 @@ export const SearchOverlayPopover = () => {
             overflow: "auto",
             "padding": "16px",
             "borderRadius": "16px",
-            display: searchEnabled ? "block" : "none"
+            display: (open || searchEnabled) ? "block" : "none"
         }}
         ref={overlay}
     >
-        <SearchOverlay open={searchEnabled} setClose={() => setSearchEnabled(false)}/>
+        <SearchOverlay 
+            open={open || searchEnabled} callback={summonerState.callback} 
+            summonerTooltip={summonerState.tooltip} defaultValue={summonerState.defaultValue}
+            setClose={setClose || (() => {setSearchEnabled(false);})}/>
     </Card>
 }

@@ -14,6 +14,7 @@ import { pb_init } from './components/UnigraphCore/Pinboard';
 
 import { ListObjectQuery, ListObjectView } from "./components/UnigraphCore/ListObjectView";
 import { getRandomInt } from "unigraph-dev-common/lib/api/unigraph";
+import { SubentityView } from "./components/UnigraphCore/SubentityView";
 
 /**
  * Things to do when Unigraph explorer loads
@@ -67,11 +68,11 @@ function init() {
 
 export type ContextMenuState = {
     anchorPosition: {top: number, left: number},
-    menuContent: ((uid: string, object: any, onfire: () => any, callbacks?: any) => React.ReactElement)[],
+    menuContent: ((uid: string, object: any, onfire: () => any, callbacks?: any, contextUid?: string) => React.ReactElement)[],
     contextObject: any,
     contextUid: string,
-    schemaMenuContent: ((uid: string, object: any, onfire: () => any, callbacks?: any) => React.ReactElement)[],
-    menuContextContent: ((uid: string, object: any, onfire: () => any, callbacks?: any) => React.ReactElement)[],
+    schemaMenuContent: ((uid: string, object: any, onfire: () => any, callbacks?: any, contextUid?: string) => React.ReactElement)[],
+    menuContextContent: ((uid: string, object: any, onfire: () => any, callbacks?: any, contextUid?: string) => React.ReactElement)[],
     contextContextObject?: any,
     contextContextUid?: string,
     removeFromContext?: string,
@@ -96,13 +97,15 @@ export type SearchPopupState = {
 function initContextMenu() {
     window.unigraph.addState('global/contextMenu', {show: false});
     window.unigraph.addState('global/searchPopup', {show: false});
+    window.unigraph.addState('registry/omnibarSummoner', {});
 }
 
 function initRegistry() {
     window.unigraph.addState('registry/dynamicView', {
         "$/schema/executable": {view: Executable},
         "$/skeleton/default": {view: DefaultSkeleton},
-        "$/schema/notification": {view: CNotification}
+        "$/schema/notification": {view: CNotification},
+        "$/schema/subentity": {view: SubentityView},
     });
     window.unigraph.addState('registry/dynamicViewDetailed', {
         "$/schema/executable": {view: CodeOrComponentView},

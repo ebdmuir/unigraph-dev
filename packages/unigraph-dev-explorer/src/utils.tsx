@@ -1,8 +1,31 @@
 import stringify from 'json-stable-stringify';
 import _ from 'lodash';
 import React from 'react';
+import { unpad } from 'unigraph-dev-common/lib/utils/entityUtils';
 
 export const NavigationContext = React.createContext((location: string) => {});
+
+export const TabContext = React.createContext({
+    viewId: 0,
+    setTitle: (title: string) => {},
+    isVisible: () => true as boolean,
+})
+export const DataContext = React.createContext({
+    rootUid: "0x0"
+})
+
+export const removeAllPropsFromObj = function(obj: any, propsToRemove: any, maxLevel?: any) {
+    if (typeof maxLevel !== "number") maxLevel = 20
+    for (var prop in obj) {
+        if (typeof propsToRemove === "string" && prop === propsToRemove)
+            delete obj[prop];
+        else if (propsToRemove.indexOf(prop) >= 0)      // it must be an array
+            delete obj[prop];
+        else if (typeof obj[prop] === "object" && maxLevel>0)
+            removeAllPropsFromObj(obj[prop], propsToRemove, maxLevel-1);
+    }
+    return obj
+}
 
 export function getParameters(search: string) {
     // Params obj
@@ -197,4 +220,18 @@ export const deselectUid = (uid?: string) => {
 
 export const isMultiSelectKeyPressed = (event: React.MouseEvent) => {
     return event.altKey;
+}
+
+export const runClientExecutable = (src: string, params: any) => {
+    // eslint-disable-next-line @typescript-eslint/no-empty-function
+    const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor
+    const fn = new AsyncFunction("require", "unpad", "context", "unigraph", `try {${src}
+    } catch (e) {
+            unigraph.addNotification({
+                from: "Executable manager", 
+                name: "Failed to run executable",
+                content: "Error was: " + e.toString() + e.stack }
+            )
+    }`).bind(this, require, unpad, {params}, window.unigraph);
+    fn();
 }

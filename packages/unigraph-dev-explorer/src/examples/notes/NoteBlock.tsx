@@ -5,13 +5,15 @@ import { AutoDynamicView } from "../../components/ObjectView/AutoDynamicView";
 import { ViewViewDetailed } from "../../components/ObjectView/DefaultObjectView";
 
 import _ from "lodash";
-import { buildGraph } from "unigraph-dev-common/lib/api/unigraph";
+import { buildGraph, getRandomInt } from "unigraph-dev-common/lib/utils/utils";
 import { Actions } from "flexlayout-react";
 import { addChild, convertChildToTodo, focusLastDFSNode, focusNextDFSNode, indentChild, setCaret, setFocus, splitChild, unindentChild, unsplitChild, replaceChildWithUid } from "./commands";
 import { onUnigraphContextMenu } from "../../components/ObjectView/DefaultObjectContextMenu";
 import { FiberManualRecord, MoreVert } from "@material-ui/icons";
 import { setSearchPopup } from "./searchPopup";
 import { noteQuery } from "./init";
+import { getParentsAndReferences } from "./utils";
+import { DynamicObjectListView } from "../../components/ObjectView/DynamicObjectListView";
 
 export const getSubentities = (data: any) => {
     let subentities: any, otherChildren: any;
@@ -28,13 +30,14 @@ export const getSubentities = (data: any) => {
 }
 
 export const NoteBlock = ({ data }: any) => {
+    const [parents, references] = getParentsAndReferences(data['~_value'], (data['unigraph.origin'] || []).filter((el: any) => el.uid !== data.uid))
     const [subentities, otherChildren] = getSubentities(data);
     const unpadded = unpad(data);
 
     return <div onClick={() => { window.wsnavigator(`/library/object?uid=${data.uid}&isStub=true&type=$/schema/note_block`) }} style={{display: "flex", alignItems: "center", width: "100%"}}>
         <div style={{flexGrow: 1}}>
             <Typography variant="body1">{unpadded.text}</Typography>
-            <Typography variant="body2" color="textSecondary">{subentities.length ? " and " + subentities.length + " children" : " no children"}</Typography>
+            <Typography variant="body2" color="textSecondary">{subentities.length} immediate children, {parents.length} parents, {references.length} linked references</Typography>
         </div>
         <div>
             {otherChildren.map((el: any) => <AutoDynamicView object={el} />)}
@@ -79,6 +82,15 @@ export const OutlineComponent = ({ children, collapsed, setCollapsed, isChildren
     </div>
 }
 
+export const ParentsAndReferences = ({data}: any) => {
+    const [parents, references] = getParentsAndReferences(data['~_value'], (data['unigraph.origin'] || []).filter((el: any) => el.uid !== data.uid))
+
+    return <div style={{marginTop: "36px"}}>
+        <DynamicObjectListView items={parents} context={null} compact titleBar=" parents"/>
+        <DynamicObjectListView items={references} context={null} compact titleBar=" linked references"/>
+    </div>
+}
+
 const NoteViewPageWrapper = ({ children, isRoot }: any) => {
     return !isRoot ? children : <div style={{ height: "100%", width: "100%", padding: "16px" }}>
         {children}
@@ -94,6 +106,7 @@ const NoteViewTextWrapper = ({ children, semanticChildren, isRoot, onContextMenu
 }
 
 export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isCollapsed }: any) => {
+    if (!callbacks?.viewId) callbacks = {...(callbacks ? callbacks : {}), viewId: getRandomInt()};
     const [subentities, otherChildren] = getSubentities(data);
     const [command, setCommand] = React.useState<() => any | undefined>();
     const inputter = (text: string) => {
@@ -123,7 +136,7 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
     const edited = React.useRef(false);
     const [isEditing, setIsEditing] = React.useState(false);
     const textInput: any = React.useRef();
-    const nodesState = window.unigraph.addState(`${options?.viewId || callbacks['get-view-id']()}/nodes`, [])
+    const nodesState = window.unigraph.addState(`${options?.viewId || callbacks?.viewId || callbacks['get-view-id']()}/nodes`, [])
     const editorContext = {
         edited, setCommand, childrenref, callbacks, nodesState
     }
@@ -137,6 +150,7 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
     React.useEffect(() => {
         const newNodes = _.unionBy([{ uid: data.uid, children: subentities.map((el: any) => el.uid), root: !isChildren }], nodesState.value, 'uid');
         nodesState.setValue(newNodes)
+        //if (!isChildren) console.log(getParentsAndReferences(data['~_value'], (data['unigraph.origin'] || []).filter((el: any) => el.uid !== data.uid)))
 
         return function cleanup() { inputDebounced.current.flush(); }
     }, [data])
@@ -162,10 +176,10 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
     }, [command])
 
     return <NoteViewPageWrapper isRoot={!isChildren}>
-        <div style={{ width: "100%", }} ref={boxRef} >
+        <div style={{ width: "100%", ...(!isChildren ? {overflow: "hidden"} : {}) }} ref={boxRef} >
             <NoteViewTextWrapper 
                 isRoot={!isChildren} onContextMenu={(event: any) => onUnigraphContextMenu(event, data, undefined, callbacks)} 
-                semanticChildren={buildGraph(otherChildren).filter((el: any) => el.type).map((el: any) => <AutoDynamicView object={el.type?.['unigraph.id'] === "$/schema/note_block" ? el : {uid: el.uid, type: el.type}} style={{width: "unset"}}/>)}
+                semanticChildren={buildGraph(otherChildren).filter((el: any) => el.type).map((el: any) => <AutoDynamicView object={el.type?.['unigraph.id'] === "$/schema/note_block" ? el : {uid: el.uid, type: el.type}} inline/>)}
             >
                 <div onPointerUp={(ev) => {
                     if (!isEditing) {
@@ -216,6 +230,8 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
                                     hasMatch = true;
                                     //inputDebounced.cancel();
                                     setSearchPopup(boxRef, match[1], async (newName: string, newUid: string) => {
+                                        const parents = getParentsAndReferences(data['~_value'], (data['unigraph.origin'] || []))[0].map((el: any) => {return {uid: el.uid}});
+                                        if (!data._hide) parents.push({uid: data.uid});
                                         const newStr = newContent?.slice?.(0, match.index) + '[[' + newName + ']]' + newContent?.slice?.(match.index + match[0].length);
                                         //console.log(newName, newUid, newStr, newContent);
                                         // This is an ADDITION operation
@@ -239,7 +255,7 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
                                                     }]
                                                 }
                                             }
-                                        }, true, false);
+                                        }, true, false, parents);
                                         window.unigraph.getState('global/searchPopup').setValue({ show: false });
                                     })
                                 }
@@ -261,15 +277,15 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
                         onKeyDown={async (ev) => {
                             const sel = document.getSelection();
                             const caret = _.min([sel?.anchorOffset, sel?.focusOffset]) as number;
-                            switch (ev.code) {
-                                case 'Enter':
+                            switch (ev.keyCode) {
+                                case 13: //enter
                                     ev.preventDefault();
                                     edited.current = false;
                                     inputDebounced.current.cancel();
                                     setCommand(() => callbacks['split-child']?.bind(this, textref.current || data.get('text').as('primitive'), caret))
                                     break;
 
-                                case 'Tab':
+                                case 9: // tab
                                     ev.preventDefault();
                                     inputDebounced.current.flush();
                                     if (ev.shiftKey) {
@@ -279,7 +295,7 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
                                     }
                                     break;
 
-                                case 'Backspace':
+                                case 8: // backspace
                                     //console.log(caret, document.getSelection()?.type)
                                     if (caret === 0 && document.getSelection()?.type === "Caret" && !(textref.current).length) {
                                         ev.preventDefault();
@@ -289,19 +305,19 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
                                     }
                                     break;
 
-                                case 'ArrowUp':
+                                case 38: // up arrow
                                     ev.preventDefault();
                                     inputDebounced.current.flush();
                                     setCommand(() => callbacks['focus-last-dfs-node'].bind(this, data, editorContext, 0))
                                     break;
 
-                                case 'ArrowDown':
+                                case 40: // down arrow
                                     ev.preventDefault();
                                     inputDebounced.current.flush();
                                     setCommand(() => callbacks['focus-next-dfs-node'].bind(this, data, editorContext, 0))
                                     break;
 
-                                case 'BracketLeft':
+                                case 219: // left bracket
                                     if (!ev.shiftKey) {
                                         ev.preventDefault();
                                         //console.log(document.getSelection())
@@ -314,7 +330,7 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
                                     }
                                     break;
 
-                                case 'Digit9':
+                                case 57: // 9 or parenthesis
                                     if (ev.shiftKey) {
                                         ev.preventDefault();
                                         //console.log(document.getSelection())
@@ -346,14 +362,14 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
                 </div>
             </NoteViewTextWrapper>
             {!isChildren ? <div style={{ height: "12px" }} /> : []}
-            {!(isCollapsed === true) ? <div ref={childrenref} style={{ width: "100%" }} >
+            {!(isCollapsed === true) ? <div ref={childrenref} style={{ width: "100%"}} >
                 {(subentities.length || isChildren) ? buildGraph(subentities).map((el: any, elindex) => {
                     const isCol = isChildrenCollapsed[el.uid];
-                    console.log(el.type);
                     return <OutlineComponent key={el.uid} isChildren={isChildren} collapsed={isCol} setCollapsed={(val: boolean) => setIsChildrenCollapsed({ ...isChildrenCollapsed, [el.uid]: val })}
                         createBelow={() => { addChild(dataref.current, editorContext) }}
                     >
                         <AutoDynamicView
+                            subentityExpandByDefault={!(el.type?.['unigraph.id'] === "$/schema/note_block")}
                             object={el.type?.['unigraph.id'] === "$/schema/note_block" ? el : {uid: el.uid, type: el.type}}
                             callbacks={{
                                 "get-view-id": () => options?.viewId, // only used at root
@@ -374,6 +390,7 @@ export const DetailedNoteBlock = ({ data, isChildren, callbacks, options, isColl
                     <PlaceholderNoteBlock callbacks={{ "add-child": () => noteBlockCommands['add-child'](dataref.current, editorContext) }} />
                 </OutlineComponent>}
             </div> : []}
+            {!isChildren ? <ParentsAndReferences data={data} /> : []}
         </div>
     </NoteViewPageWrapper>
 }

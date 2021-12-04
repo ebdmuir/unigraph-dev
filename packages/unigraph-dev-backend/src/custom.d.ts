@@ -172,6 +172,7 @@ declare type EventUpdateObject = {
   upsert: boolean | undefined,
   pad: boolean | undefined,
   subIds?: any[] | any,
+  origin?: any[]
 }
 
 declare type EventDeleteRelation = {
@@ -185,6 +186,16 @@ declare type EventDeleteRelation = {
 declare type EventDeleteItemFromArray = {
   type: "event",
   event: "delete_item_from_array",
+  id: number,
+  uid: string,
+  item: any,
+  relUid?: string,
+  subIds: any[] | any,
+}
+
+declare type EventReorderItemInArray = {
+  type: "event",
+  event: "reorder_item_in_array",
   id: number,
   uid: string,
   item: any,

@@ -27,7 +27,7 @@ export const Tag: DynamicViewRenderer = ({data, callbacks}) => {
             label={tag.name}
             onClick={() => {
                 //console.log(data)
-                navigator(`/library/object?uid=${uid}`)
+                navigator(`/library/object?uid=${uid}&type=${data?.type?.['unigraph.id']}`)
             }}
         />}
     </NavigationContext.Consumer>
@@ -40,6 +40,3 @@ export const SemanticProperties = ({data}: any) => {
         return <AutoDynamicView object={unpad(el['_value'])} />
     })) : []
 }
-
-
-registerDynamicViews({"$/schema/tag": Tag})

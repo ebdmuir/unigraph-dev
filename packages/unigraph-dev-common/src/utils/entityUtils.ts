@@ -210,7 +210,7 @@ function buildUnigraphEntityPart (rawPart: any, options: BuildEntityOptions, sch
                 definitions = unionSchema._parameters._definitions.filter((el: any) => el.type['unigraph.id'] === userType['unigraph.id'])
                 //rawPart = (rawPart['_value'] || rawPart['_value'] === '') ? rawPart['_value'] : rawPart;
             }
-            let choicesResults = definitions.map(defn => {
+            let choicesResults = (_.uniqBy(definitions, "uid")).map(defn => {
                 try {
                     return [defn, buildUnigraphEntityPart(rawPart, options, schemaMap, defn)]
                 } catch (e) {console.log(e.message || e); return undefined};
@@ -317,6 +317,7 @@ export function makeQueryFragmentFromType(schemaName: string, schemaMap: Record<
     function makePart(localSchema: Definition | any, depth = 0, isRoot = false, uidOnly = false) {
         if (depth > maxDepth) return {};
         let entries: any = {"uid": {}, "unigraph.id": {}, 'type': { "unigraph.id": {} }};
+        if (!localSchema?.type?.["unigraph.id"]) return {};
         let type = localSchema.type["unigraph.id"];
 
         if (type === '$/schema/any') {
@@ -633,6 +634,7 @@ export const byUpdatedAt = (a: any, b: any) => (new Date((a["_timestamp"]?.["_up
 
 export function unpadRecurse(object: any, visitedUids: any[] = []) {
     let result: any = undefined;
+    if (object?.uid && visitedUids.includes(object.uid)) return {uid: object.uid};
     if (typeof object === "object" && !Array.isArray(object)) {
         result = {};
         let newVisited = object['uid'] ? [...visitedUids, object['uid']] : visitedUids

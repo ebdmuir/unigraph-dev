@@ -4,26 +4,39 @@ import { useDrag, useDrop } from 'react-dnd';
 import { ErrorBoundary } from 'react-error-boundary';
 import { useSwipeable } from 'react-swipeable';
 import { getRandomInt } from 'unigraph-dev-common/lib/api/unigraph';
+import { UnigraphObject } from 'unigraph-dev-common/lib/utils/utils';
 import { AutoDynamicViewProps } from '../../types/ObjectView';
-import { isMobile, isMultiSelectKeyPressed, selectUid } from '../../utils';
+import { DataContext, isMobile, isMultiSelectKeyPressed, selectUid, TabContext } from '../../utils';
 import { onUnigraphContextMenu } from './DefaultObjectContextMenu';
 import { StringObjectViewer } from './DefaultObjectView';
-import { isStub, SubentityDropAcceptor } from './utils';
+import { getSubentities, isStub, SubentityDropAcceptor } from './utils';
 
-export const AutoDynamicView = ({ object, callbacks, component, attributes, inline, allowSubentity, style, noDrag, noDrop, noContextMenu }: AutoDynamicViewProps) => {
+export const AutoDynamicView = ({ object, callbacks, component, attributes, inline, allowSubentity, allowSemantic, style, noDrag, noDrop, noContextMenu, subentityExpandByDefault }: AutoDynamicViewProps) => {
+    if (!callbacks) callbacks = {};
     allowSubentity = allowSubentity === true;
+
+    const dataContext = React.useContext(DataContext);
+    const tabContext = React.useContext(TabContext);
 
     const isObjectStub = isStub(object);
     const [loadedObj, setLoadedObj] = React.useState<any>(false);
     const [subsId, setSubsId] = React.useState(0);
+    const [isRecursion, setIsRecursion] = React.useState<any>(undefined);
     const getObject = () => isObjectStub ? loadedObj : object;
+
+    const [showSubentities, setShowSubentities] = React.useState(!!subentityExpandByDefault);
+
     const DynamicViews = {...window.unigraph.getState('registry/dynamicView').value, ...(component ? component : {})}
+
+    if (getSubentities(object)?.length > 0) {
+        callbacks!.showSubentities = (show?: boolean) => { setShowSubentities(show === undefined ? !showSubentities : show) }
+    }
 
     React.useEffect(() => {
         const newSubs = getRandomInt();
         if (isObjectStub) {
             if (subsId) window.unigraph.unsubscribe(subsId);
-            let query = DynamicViews[object.type['unigraph.id']].query?.(object.uid)
+            let query = DynamicViews[object.type['unigraph.id']]?.query?.(object.uid)
             if (!query) query = `(func: uid(${object.uid})) @recurse {
                 uid
                 unigraph.id
@@ -40,7 +53,13 @@ export const AutoDynamicView = ({ object, callbacks, component, attributes, inli
 
     const [{ isDragging }, drag] = useDrag(() => ({
         type: object?.['type']?.['unigraph.id'] || "$/schema/any",
-        item: {uid: object?.uid, itemType: object?.type?.['unigraph.id']},
+        item: {
+            uid: object?.uid, 
+            itemType: object?.type?.['unigraph.id'],
+            dndContext: tabContext.viewId,
+            dataContext: dataContext.rootUid,
+            removeFromContext: callbacks?.removeFromContext,
+        },
         collect: (monitor) => ({
           isDragging: !!monitor.isDragging()
         })
@@ -72,34 +91,60 @@ export const AutoDynamicView = ({ object, callbacks, component, attributes, inli
     const selectedState = window.unigraph.getState('global/selected');
     selectedState.subscribe((sel: any) => {if (sel?.includes?.(object?.uid)) setIsSelected(true); else setIsSelected(false);})
 
+    function getParents(elem: any) {
+        var parents = [];
+        while(elem.parentNode && elem.parentNode.nodeName.toLowerCase() != 'body') {
+          elem = elem.parentNode;
+          if (elem.id) parents.push(elem.id);
+        }
+        return parents;
+      }
+
     const attach = React.useCallback((domElement) => {
+        if (domElement && object.uid) {
+            const ids = getParents(domElement);
+            if (ids.includes("object-view-"+object?.uid)) {
+                // recursive - deal with it somehow
+                setIsRecursion(true);
+            } else setIsRecursion(false);
+        } else if (!object.uid) {
+            setIsRecursion(false)
+        }
+
         if (!noDrag) drag(domElement);
         if (!noDrop) drop(domElement);
         if (isMobile()) handlers.ref(domElement);
     }, [isDragging, drag, callbacks])
 
-    //console.log(object) 
-    let el;
-    if (object?.type && object.type['unigraph.id'] && Object.keys(DynamicViews).includes(object.type['unigraph.id']) && getObject()) {
-        el = React.createElement(DynamicViews[object.type['unigraph.id']].view, {
-            data: getObject(), callbacks: callbacks ? callbacks : undefined, ...(attributes ? attributes : {})
-        });
-    } else if (object && getObject()) {
-        el = <StringObjectViewer object={getObject()}/>
-    } else {
-        el = <React.Fragment />
-    }
-    return el ? <ErrorBoundary onError={(error: Error, info: {componentStack: string}) => {
+    const getEl = React.useCallback((viewId, setTitle) => {
+        if (isRecursion === false && object?.type && object.type['unigraph.id'] && Object.keys(DynamicViews).includes(object.type['unigraph.id']) && getObject()) {
+            return React.createElement(DynamicViews[object.type['unigraph.id']].view, {
+                data: getObject(), callbacks: {viewId, setTitle, ...(callbacks ? callbacks : {})}, ...(attributes ? attributes : {})
+            });
+        } else if (isRecursion === false && object && getObject()) {
+            return <StringObjectViewer object={getObject()}/>
+        } else if (isRecursion === true) {
+            return <Typography style={{color: "red"}}>
+                Recursive element (uid: {object.uid}), ignored!
+            </Typography>
+        } else {
+            return <React.Fragment />
+        }
+    }, [isRecursion, object, object.uid, callbacks, attributes, DynamicViews, isObjectStub]);
+    
+    
+    return <ErrorBoundary onError={(error: Error, info: {componentStack: string}) => {
         console.error(error);
       }} FallbackComponent={({error}) => <div style={{backgroundColor: "floralwhite", borderRadius: "8px"}}>
         <Typography>Error in AutoDynamicView: (for object {object?.uid})</Typography>
         <p>{error.message}</p>
     </div>}>
+        <div style={{display: inline ? "inline" : "block", ...(inline ? {} : {width: "100%"}), backgroundColor: (isSelected || isDragging) ? "whitesmoke" : "unset", borderRadius: (isSelected || isDragging) ? "12px" : "",}}>
         <div 
             id={"object-view-"+object?.uid} 
             style={{
-                backgroundColor: isSelected ? "whitesmoke" : "unset",
-                opacity: isDragging ? 0.5 : 1, 
+                opacity: isDragging ? 0 : 1,
+                boxSizing: "border-box",
                 display: "inline-flex", alignItems: "center",
                 ...(inline ? {} : {width: "100%"}),
                 ...(isMobile() ? {touchAction: "pan-y"} : {}),
@@ -111,8 +156,12 @@ export const AutoDynamicView = ({ object, callbacks, component, attributes, inli
             {...(attributes ? attributes : {})}
             ref={attach} 
         >
-            {el}
+                {getEl(tabContext.viewId, tabContext.setTitle)}   
         </div>
+        {showSubentities && getSubentities(object)?.length > 0 ? <div style={{width: "100%", paddingLeft: "24px"}}>
+                <ul>{getSubentities(object).map((el: any) => <li><AutoDynamicView object={new UnigraphObject(el['_value'])} callbacks={callbacks} /></li>)}</ul>
+            </div> : []}
         {(allowSubentity && !noDrop) ? <SubentityDropAcceptor uid={object?.uid} /> : []}
-    </ErrorBoundary> : <React.Fragment/>;
+        </div>
+    </ErrorBoundary>;
 }

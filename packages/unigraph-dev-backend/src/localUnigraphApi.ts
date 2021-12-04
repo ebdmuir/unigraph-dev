@@ -43,7 +43,7 @@ export function getLocalUnigraphAPI(client: DgraphClient, states: {caches: Recor
             const query = name === "any" ? ((all || uidsOnly) ? queryAnyAll : queryAny) : `(func: uid(par${eventId})${first ? ", first: "+first : ""}) 
                 @filter((type(Entity)) AND (NOT eq(<_propertyType>, "inheritance")) 
                 ${ showHidden ? "" : "AND (NOT eq(<_hide>, true))" } AND (NOT type(Deleted)))
-            ${uidsOnly ? "{ uid }" : (metadataOnly ? " { uid <dgraph.type> type { <unigraph.id> } } " : makeQueryFragmentFromType(name, states.caches["schemas"].data, depth))}
+            ${uidsOnly ? "{ uid }" : (all ? "@recurse { uid <unigraph.id> expand(_userpredicate_) } " : (metadataOnly ? " { uid <dgraph.type> type { <unigraph.id> } } " : makeQueryFragmentFromType(name, states.caches["schemas"].data, depth)))}
             var(func: eq(<unigraph.id>, "${name}")) {
             <~type> {
             par${eventId} as uid
@@ -60,8 +60,8 @@ export function getLocalUnigraphAPI(client: DgraphClient, states: {caches: Recor
                 // Is named entity
                 uid = states.namespaceMap[uid].uid;
             }
-            const frag = `(func: uid(${Array.isArray(uid) ? uid.reduce((prev: string, el: string) => prev + el + ",", "").slice(0, -1): uid })) 
-                ${options?.queryAsType ? makeQueryFragmentFromType(options.queryAsType, states.caches["schemas"].data) : "@recurse { uid unigraph.id expand(_userpredicate_) }"}`
+            const frag = options.queryFn ? options.queryFn.replace('QUERYFN_TEMPLATE', (Array.isArray(uid) ? uid.join(', ') : uid)) :`(func: uid(${Array.isArray(uid) ? uid.join(', ') : uid })) 
+                ${options?.queryAsType ? makeQueryFragmentFromType(options.queryAsType, states.caches["schemas"].data, options?.depth) : "@recurse { uid unigraph.id expand(_userpredicate_) }"}`
             const newSub = typeof callback === "function" ? 
                 createSubscriptionLocal(eventId, callback, frag) :
                 createSubscriptionWS(eventId, callback.ws, frag, callback.connId, states.getClientId(callback.connId));
@@ -122,6 +122,7 @@ export function getLocalUnigraphAPI(client: DgraphClient, states: {caches: Recor
         },
         getQueries: async (fragments, getAll = false, batch = 50) => {
             let allQueries;
+            if (!Array.isArray(fragments)) fragments = [fragments];
             if (getAll) allQueries = fragments.map((it, index) => `query${index}(func: uid(par${index})) @recurse {uid unigraph.id expand(_userpredicate_)}
             par${index} as var${it}`)
             else allQueries = fragments.map((it, index) => `query${index}${it}`)
@@ -144,7 +145,8 @@ export function getLocalUnigraphAPI(client: DgraphClient, states: {caches: Recor
             return res;
         },
         deleteObject: async (uid, permanent) => {
-            if (uid.startsWith('$/') && states.namespaceMap[uid]) uid = states.namespaceMap[uid].uid;
+            if (!Array.isArray(uid)) uid = [uid]
+            const toDel = uid.map((uidi: any) => (uidi.startsWith('$/') && states.namespaceMap[uidi]) ? states.namespaceMap[uidi].uid : uidi);
             permanent ? await client.deleteUnigraphObjectPermanently(uid) : await client.deleteUnigraphObject(uid);
             callHooks(states.hooks, "after_object_changed", {subscriptions: states.subscriptions, caches: states.caches})
         },
@@ -162,13 +164,15 @@ export function getLocalUnigraphAPI(client: DgraphClient, states: {caches: Recor
                 callHooks(states.hooks, "after_object_changed", {subscriptions: states.subscriptions, caches: states.caches})
             }
         },
-        updateObject: async (uid, newObject, isUpsert = true, pad = true, subIds) => {
+        updateObject: async (uid, newObject, isUpsert = true, pad = true, subIds, origin) => {
             clearEmpties(newObject);
             const newUid = uid ? uid : newObject.uid
             // Get new object's unigraph.origin first
             //console.log("update: 1")
-            let origin = newObject['unigraph.origin'] ? newObject['unigraph.origin'] : (await client.queryData<any>(`query { entity(func: uid(${newUid})) { <unigraph.origin> { uid } }}`, []))[0]?.['unigraph.origin']
-            if (!Array.isArray(origin)) origin = [origin];
+            if (!origin) {
+                origin = newObject['unigraph.origin'] ? newObject['unigraph.origin'] : (await client.queryData<any>(`query { entity(func: uid(${newUid})) { <unigraph.origin> { uid } }}`, []))[0]?.['unigraph.origin']
+                if (!Array.isArray(origin)) origin = [origin];
+            }
             //console.log("update: 2", uid)
             const origObject = (await client.queryUID(uid))[0];
             let finalUpdater = newObject;
@@ -194,6 +198,57 @@ export function getLocalUnigraphAPI(client: DgraphClient, states: {caches: Recor
         deleteRelation: async (uid, relation) => {
             await client.deleteRelationbyJson({uid: uid, ...relation});
             callHooks(states.hooks, "after_object_changed", {subscriptions: states.subscriptions, caches: states.caches})
+        },
+        reorderItemInArray: async (uid, item, relUid, subIds) => {
+            const items: [(number | string), number][] = (Array.isArray(item[0]) ? item : [item]) as any
+            const query = `query { res(func: uid(${uid})) {
+                uid
+                <_value[> {
+                    uid
+                    _index { uid <_value.#i> }
+                    _value { uid 
+                        _value { uid }
+                    }
+                }
+            }}`
+            const origObject = (await client.queryDgraph(query))[0][0];
+            if (!origObject || !(Array.isArray(origObject['_value[']))) {
+                throw Error("Cannot reorder as source item is not an array!");
+            }
+            origObject['_value['].sort((a: any, b: any) => (a["_index"]?.["_value.#i"] || 0) - (b["_index"]?.["_value.#i"] || 0));
+            // Reorder items
+            let newObject = origObject['_value['].map(el => el['_index']['uid']);
+            const permutations: [string, number][] = items.map((el) => {
+                const targetIndex = el[1];
+                let source;
+                origObject['_value['].forEach((ell: any, index: number) => {
+                    if (el[0] === index || el[0] === ell.uid || el[0] === ell['_value']?.uid || el[0] === ell['_value']?.['_value']?.uid) {
+                        source = ell._index.uid;
+                    }
+                })
+                return source ? [source, targetIndex] : undefined
+            }).filter(el => el !== undefined) as any;
+            permutations.forEach(([source, target]) => {
+                let oldIndex = newObject.length;
+                const toInsert = newObject.filter((el, index) => {
+                    if (el === source) oldIndex = index;
+                    return el !== source
+                });
+                toInsert.splice(oldIndex < target ? target : target+1, 0, source);
+                newObject = toInsert;
+            });
+            const quads = newObject.map((el, index) => `<${el}> <_value.#i> "${index}" .\n`);
+            const create_json = new dgraph.Mutation();
+            create_json.setSetNquads(quads.join(''));
+            const result = await client.createDgraphUpsert({
+                query: false,
+                mutations: [
+                    create_json
+                ]
+            });
+
+            callHooks(states.hooks, "after_object_changed", {subscriptions: states.subscriptions, caches: states.caches, subIds: subIds})
+            return result
         },
         deleteItemFromArray: async (uid, item, relUid, subIds) => {
             const items = Array.isArray(item) ? item : [item]

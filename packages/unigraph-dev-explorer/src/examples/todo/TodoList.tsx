@@ -1,4 +1,4 @@
-import { Button, Checkbox, Chip, ListItemIcon, ListItemText, TextField } from '@material-ui/core';
+import { Button, Checkbox, Chip, ListItemIcon, ListItemText, TextField, Typography } from '@material-ui/core';
 import { CalendarToday, PriorityHigh } from '@material-ui/icons';
 import React, { useState } from 'react';
 import { DynamicViewRenderer } from '../../global';
@@ -29,18 +29,13 @@ function TodoListBody ({data}: { data: ATodoList[] }) {
             context={null}
             filters={filters}
             defaultFilter={"only-incomplete"}
+            compact
         />
         <TextField value={newName} onChange={(e) => setNewName(e.target.value)}></TextField>
         <Button onClick={
             () => window.unigraph.addObject(parseTodoObject(newName), "$/schema/todo")
             //() => console.log(parseTodoObject(newName))
         }>Add</Button>
-        <p>
-            Examples: <br/>
-            @tomorrow-"next Friday" #unigraph hello world     // doable from tomorrow, due next Friday<br/>
-            @tomorrow #unigraph hello world     // due tomorrow<br/>
-            !5 very important stuff     // priority 5
-        </p>
     </div>
 }
 
@@ -59,14 +54,12 @@ export const TodoItem: DynamicViewRenderer = ({data, callbacks}) => {
         }
     };
     //console.log(data.uid, unpadded)
-    return <React.Fragment>
-        <ListItemIcon>
+    return <div style={{display: "flex"}}>
             <Checkbox checked={unpadded.done} onClick={_ => {
                 //window.unigraph.updateSimpleObject(todo, "done", !unpadded.done);
                 data.get('done')['_value.!'] = !data.get('done')['_value.!'];
                 totalCallbacks['onUpdate'](data);
             }} />
-        </ListItemIcon>
         <ListItemText 
             primary={<AutoDynamicView object={data.get('name')['_value']['_value']} noDrag noDrop noContextMenu />}
             secondary={<div style={{display: "flex", alignItems: "baseline"}} children={[...(!unpadded.children?.map ? [] :
@@ -75,7 +68,7 @@ export const TodoItem: DynamicViewRenderer = ({data, callbacks}) => {
             ...(unpadded.time_frame?.start?.datetime && (new Date(unpadded.time_frame?.start?.datetime)).getTime() !== 0 ? [<Chip size="small" icon={<CalendarToday/>} label={"Start: " + Sugar.Date.relative(new Date(unpadded.time_frame?.start?.datetime))} />] : []),
             ...(unpadded.time_frame?.end?.datetime && (new Date(unpadded.time_frame?.start?.datetime)).getTime() !== maxDateStamp ? [<Chip size="small" icon={<CalendarToday/>} label={"End: " + Sugar.Date.relative(new Date(unpadded.time_frame?.end?.datetime))} />] : [])]}></div>}
         />
-    </React.Fragment>
+    </div>
 }
 
 registerDynamicViews({"$/schema/todo": TodoItem})
@@ -86,7 +79,17 @@ const quickAdder = async (inputStr: string, preview = true) => {
     else return [parsed, '$/schema/todo'];
 }
 
-registerQuickAdder({'todo': quickAdder, 'td': quickAdder})
+const tt = () => <React.Fragment>
+    <Typography style={{color: "gray"}}>Examples:</Typography>
+    <Typography>@tomorrow-"next Friday" #unigraph hello world</Typography>
+    <Typography style={{color: "gray"}} variant="body2">doable from tomorrow, due next Friday</Typography>
+    <Typography>@tomorrow #unigraph hello world</Typography>
+    <Typography style={{color: "gray"}} variant="body2">due tomorrow</Typography>
+    <Typography>!5 very important stuff</Typography>
+    <Typography style={{color: "gray"}} variant="body2">priority 5</Typography>
+</React.Fragment>
+
+registerQuickAdder({'todo': {adder: quickAdder, tooltip: tt}, 'td': {adder: quickAdder, tooltip: tt}})
 
 export const TodoList = withUnigraphSubscription( 
     // @ts-ignore

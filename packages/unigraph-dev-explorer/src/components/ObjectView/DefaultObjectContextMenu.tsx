@@ -3,14 +3,14 @@ import _ from 'lodash';
 import React from 'react';
 import { getRandomInt, UnigraphObject } from 'unigraph-dev-common/lib/api/unigraph';
 import { AutoDynamicViewCallbacks, ContextMenuGenerator } from '../../types/ObjectView';
-import { isMultiSelectKeyPressed, NavigationContext, selectUid } from '../../utils';
+import { isMultiSelectKeyPressed, NavigationContext, runClientExecutable, selectUid } from '../../utils';
 import { getComponentAsView } from './DynamicComponentView';
 
 import Icon from '@mdi/react'
 import { mdiCubeOutline, mdiDatabaseOutline, mdiCloseBoxOutline, mdiCloseBoxMultipleOutline, mdiViewDayOutline, mdiFileTreeOutline, mdiVectorPolylineEdit, mdiInboxArrowDownOutline, mdiLinkBoxVariantOutline, mdiDeleteOutline, mdiGraphOutline } from '@mdi/js';
 
 export const defaultContextMenu: Array<ContextMenuGenerator> = [
-    (uid, object, handleClose, callbacks) => <MenuItem style={{paddingTop: "2px", paddingBottom: "2px"}} onClick={() => {handleClose(); window.wsnavigator(`/library/object?uid=${uid}&viewer=${"dynamic-view-detailed"}`)}}>
+    (uid, object, handleClose, callbacks) => <MenuItem style={{paddingTop: "2px", paddingBottom: "2px"}} onClick={() => {handleClose(); window.wsnavigator(`/library/object?uid=${uid}&viewer=${"dynamic-view-detailed"}&type=${object?.type?.['unigraph.id']}`)}}>
         <ListItemIcon style={{minWidth: "36px"}}><Icon path={mdiViewDayOutline} size={1}/></ListItemIcon>
         <ListItemText>View object with its default</ListItemText>
         
@@ -76,7 +76,7 @@ export const DefaultObjectContextMenu = ({uid, object, anchorEl, handleClose}:
     </Menu>)
 }
 
-const getObjectContextMenuQuery = (schema: string) => `(func: uid(uids)) @recurse{
+export const getObjectContextMenuQuery = (schema: string, onlyShortcuts = false) => `(func: uid(uids)) @recurse{
     uid
 unigraph.id
 expand(_userpredicate_)
@@ -86,6 +86,11 @@ uid
 type @filter(eq(<unigraph.id>, "$/schema/context_menu_item")) {
         <unigraph.id>
 }
+${onlyShortcuts === true ? `_value {
+    is_shortcut @filter(eq(<_value.!>, true)) {
+        <_value.!>
+    }
+}` : ""}
 
 }
 var(func: eq(<unigraph.id>, "${schema}")) {
@@ -93,6 +98,28 @@ var(func: eq(<unigraph.id>, "${schema}")) {
         origins as uid
 }
 }`
+
+export const onDynamicContextMenu = (data: any, uid: string, object: any, callbacks?: any, contextUid?: string) => {
+    const view = data['_value']?.['view']?.['_value'];
+    console.log(view);
+    const onClick = data['_value']?.['on_click']?.['_value'];
+    if (view && view?._value?.view?._value?.['dgraph.type']?.includes?.('Executable') && view?._value.view?.['_value']?.['_value']?.['env']?.['_value.%']?.startsWith?.('component')) {
+        window.newTab(window.layoutModel, {
+            type: "tab",
+            name: view?.['_value']?.['name']?.['_value.%'] || "Custom view",
+            component: "/pages/" + view._value.view._value.uid,
+            enableFloat: "true",
+            config: {object, contextUid}
+        });
+    } else if (onClick && onClick['dgraph.type']?.includes?.('Executable')) {
+        window.unigraph.runExecutable(onClick.uid, {uid, callbacks, contextUid}, undefined, true).then((ret: any) => {
+            if (ret?.return_function_component !== undefined) {
+                // Not a component, but custom code to be run here
+                runClientExecutable(ret.return_function_component, {uid, callbacks, contextUid})
+            }
+        })
+    }
+}
 
 /**
  * Unigraph context menu wrapper.
@@ -134,21 +161,10 @@ export const onUnigraphContextMenu = (event: React.MouseEvent, object: UnigraphO
         console.log(items); 
         window.unigraph.getState('global/contextMenu').setValue({
             ...window.unigraph.getState('global/contextMenu').value,
-            schemaMenuContent: items.map((el: any) => (uid: string, object: any, onfire: () => any, callbacks?: any) => 
+            schemaMenuContent: items.map((el: any) => (uid: string, object: any, onfire: () => any, callbacks?: any, contextUid?: string) => 
                 <MenuItem onClick={() => {
                     onfire();
-                    const view = el['_value']?.['view']?.['_value'];
-                    if (view && view['dgraph.type']?.includes?.('Executable')) {
-                        getComponentAsView(view, {uid, object}).then((newViewId: any) => {
-                            window.newTab(window.layoutModel, {
-                                type: "tab",
-                                name: "Temp view",
-                                component: newViewId,
-                                enableFloat: "true",
-                                config: {}
-                            })
-                        });
-                    }
+                    onDynamicContextMenu(el, uid, object, callbacks, contextUid);
                 }}>
                     {(new UnigraphObject(el)).get('name').as('primitive') || ""}
                 </MenuItem>),

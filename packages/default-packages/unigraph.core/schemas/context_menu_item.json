@@ -1,5 +1,6 @@
 {
     "dgraph.type": "Type",
+    "_name": "Context menu item",
     "_definition": {
         "type": { "unigraph.id": "$/composer/Object" },
         "_parameters": {
@@ -36,7 +37,25 @@
             {
                 "_key": "view",
                 "_definition": {
+                    "type": { "unigraph.id": "$/schema/view" }
+                }
+            },
+            {
+                "_key": "on_click",
+                "_definition": {
                     "type": { "unigraph.id": "$/schema/executable" }
+                }
+            },
+            {
+                "_key": "icon",
+                "_definition": {
+                    "type": { "unigraph.id": "$/schema/icon_url" }
+                }
+            },
+            {
+                "_key": "is_shortcut",
+                "_definition": {
+                    "type": { "unigraph.id": "$/primitive/boolean" }
                 }
             },
             {

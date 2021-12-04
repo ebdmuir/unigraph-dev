@@ -4,7 +4,7 @@ import WebSocket from 'ws';
 import { isJsonString } from 'unigraph-dev-common/lib/utils/utils';
 import DgraphClient from './dgraphClient';
 import { insertsToUpsert } from 'unigraph-dev-common/lib/utils/txnWrapper';
-import { EventAddNotification, EventAddUnigraphPackage, EventCreateDataByJson, EventCreateUnigraphObject, EventCreateUnigraphSchema, EventDeleteItemFromArray, EventDeleteRelation, EventDeleteUnigraphObject, EventEnsureUnigraphPackage, EventEnsureUnigraphSchema, EventExportObjects, EventGetPackages, EventGetQueries, EventGetSchemas, EventGetSearchResults, EventImportObjects, EventProxyFetch, EventQueryByStringWithVars, EventResponser, EventRunExecutable, EventSetDgraphSchema, EventSubscribeObject, EventSubscribeQuery, EventSubscribeType, EventUnsubscribeById, EventUpdateObject, EventUpdateSPO, IWebsocket, UnigraphUpsert } from './custom';
+import { EventAddNotification, EventAddUnigraphPackage, EventCreateDataByJson, EventCreateUnigraphObject, EventCreateUnigraphSchema, EventDeleteItemFromArray, EventDeleteRelation, EventDeleteUnigraphObject, EventEnsureUnigraphPackage, EventEnsureUnigraphSchema, EventExportObjects, EventGetPackages, EventGetQueries, EventGetSchemas, EventGetSearchResults, EventImportObjects, EventProxyFetch, EventQueryByStringWithVars, EventReorderItemInArray, EventResponser, EventRunExecutable, EventSetDgraphSchema, EventSubscribeObject, EventSubscribeQuery, EventSubscribeType, EventUnsubscribeById, EventUpdateObject, EventUpdateSPO, IWebsocket, UnigraphUpsert } from './custom';
 import { buildUnigraphEntity, processAutoref, dectxObjects, processAutorefUnigraphId } from 'unigraph-dev-common/lib/utils/entityUtils';
 import { addUnigraphPackage, checkOrCreateDefaultDataModel, createPackageCache, createSchemaCache } from './datamodelManager';
 import { Cache } from './caches';
@@ -80,6 +80,7 @@ export default async function startServer(client: DgraphClient) {
   }
 
   let namespaceMap: any = {}
+  let debounceId: NodeJS.Timeout;
 
   Object.assign(serverStates, {
     caches: caches,
@@ -91,23 +92,29 @@ export default async function startServer(client: DgraphClient) {
     runningExecutables: [],
     addRunningExecutable: (defn: any) => {
       serverStates.runningExecutables.push(defn);
-      Object.values(connections).forEach(el => {
-        el.send(stringify({
-          "type": "cache_updated",
-          "name": "runningExecutables",
-          result: serverStates.runningExecutables
-        }))
-      })
+      clearTimeout(debounceId);
+      debounceId = setTimeout(() => {
+        Object.values(connections).forEach(el => {
+          el.send(stringify({
+            "type": "cache_updated",
+            "name": "runningExecutables",
+            result: serverStates.runningExecutables
+          }))
+        })
+      }, 250)
     },
     removeRunningExecutable: (id: any) => {
       serverStates.runningExecutables = serverStates.runningExecutables.filter((el: any) => el.id !== id);
-      Object.values(connections).forEach(el => {
-        el.send(stringify({
-          "type": "cache_updated",
-          "name": "runningExecutables",
-          result: serverStates.runningExecutables
-        }))
-      })
+      clearTimeout(debounceId);
+      debounceId = setTimeout(() => {
+        Object.values(connections).forEach(el => {
+          el.send(stringify({
+            "type": "cache_updated",
+            "name": "runningExecutables",
+            result: serverStates.runningExecutables
+          }))
+        })
+      }, 250)
     }
   })
 
@@ -124,7 +131,20 @@ export default async function startServer(client: DgraphClient) {
   }, `(func: eq(<unigraph.id>, "$/meta/namespace_map")) {
     uid
     <unigraph.id>
-    expand(_userpredicate_) {uid}
+    _name
+    _icon
+    expand(_userpredicate_) {
+      uid
+      <unigraph.id>
+      _name
+      _icon
+      <_value[> {
+        uid
+        <unigraph.id>
+        _name
+        _icon
+      }
+    }
   }`);
 
   serverStates.subscriptions.push(namespaceSub);
@@ -172,6 +192,11 @@ export default async function startServer(client: DgraphClient) {
     "subscribe_to_object": function (event: EventSubscribeObject, ws: IWebsocket) {
       serverStates.localApi.subscribeToObject(event.uid, {ws: ws, connId: event.connId}, event.id, event.options || {})
         .then((res: any) => ws.send(makeResponse(event, true)));
+    },
+
+    "get_object": function (event: EventSubscribeObject, ws: IWebsocket) {
+      serverStates.localApi.getObject(event.uid, {ws: ws, connId: event.connId}, event.id, event.options || {})
+        .then((res: any) => ws.send(makeResponse(event, true, {result: res})));
     },
 
     "subscribe_to_type": function (event: EventSubscribeType, ws: IWebsocket) {
@@ -310,8 +335,11 @@ export default async function startServer(client: DgraphClient) {
       perfLogStartPreprocessing();
       const newUid = event.uid ? event.uid : event.newObject.uid
       // Get new object's unigraph.origin first
-      let origin = event.newObject['unigraph.origin'] ? event.newObject['unigraph.origin'] : (await dgraphClient.queryData<any>(`query { entity(func: uid(${newUid})) { <unigraph.origin> { uid }}}`, []))[0]?.['unigraph.origin']
-      if (!Array.isArray(origin)) origin = [origin];
+      let origin;
+      if (!event.origin) {
+        origin = event.newObject['unigraph.origin'] ? event.newObject['unigraph.origin'] : (await dgraphClient.queryData<any>(`query { entity(func: uid(${newUid})) { <unigraph.origin> { uid }}}`, []))[0]?.['unigraph.origin']
+        if (!Array.isArray(origin)) origin = [origin];
+      } else origin = event.origin;
       if (typeof event.upsert === "boolean" && !event.upsert) {
         if (event.pad) { 
           ws.send(makeResponse(event, false, {"error": "In non-upsert mode, you have to supply a padded object, since we are mutating metadata explicitly as well."})) 
@@ -319,7 +347,6 @@ export default async function startServer(client: DgraphClient) {
           let newObject = {...event.newObject, uid: newUid, 'unigraph.origin': origin}; // If specifying UID, override with it
           let autorefObject = processAutorefUnigraphId(newObject);
           const upsert = insertsToUpsert([autorefObject], false);
-          //console.log(JSON.stringify(upsert, null, 4))
           perfLogStartDbTransaction();
           dgraphClient.createUnigraphUpsert(upsert).then(_ => {
             perfLogAfterDbTransaction();
@@ -333,7 +360,7 @@ export default async function startServer(client: DgraphClient) {
           const origObject = (await dgraphClient.queryUID(event.uid))[0];
           const schema = origObject['type']['unigraph.id'];
           const paddedUpdater = buildUnigraphEntity(event.newObject, schema, caches['schemas'].data, true, {validateSchema: true, isUpdate: true, states: {}, globalStates: {}});
-          finalUpdater = processAutoref({...paddedUpdater, uid: event.uid}, schema, caches['schemas'].data);
+          finalUpdater = processAutoref({...paddedUpdater, uid: event.uid, 'unigraph.origin': origin}, schema, caches['schemas'].data);
           //console.log(upsert);
           console.log(JSON.stringify(finalUpdater, null, 4))
         } else {
@@ -351,6 +378,12 @@ export default async function startServer(client: DgraphClient) {
 
     "delete_relation": async function (event: EventDeleteRelation, ws: IWebsocket) {
       localApi.deleteRelation(event.uid, event.relation).then(() => {
+        ws.send(makeResponse(event, true))
+      }).catch((e: any) => ws.send(makeResponse(event, false, {"error": e})));
+    },
+
+    "reorder_item_in_array": async function (event: EventReorderItemInArray, ws: IWebsocket) {
+      (localApi as any).reorderItemInArray(event.uid, event.item, event.relUid, event.subIds).then((_: any) => {
         ws.send(makeResponse(event, true))
       }).catch((e: any) => ws.send(makeResponse(event, false, {"error": e})));
     },
@@ -484,7 +517,7 @@ export default async function startServer(client: DgraphClient) {
       if (msgObject) {
         // match events
         if (msgObject.type === "event" && msgObject.event && eventRouter[msgObject.event]) {
-          if (verbose >= 1) console.log("Event: " + msgObject.event + ", from: " + clientBrowserId + " | " + connId);
+          if (verbose >= 1 && msgObject.event !== "run_executable") console.log("Event: " + msgObject.event + ", from: " + clientBrowserId + " | " + connId);
           eventRouter[msgObject.event]({...msgObject, connId: connId}, ws);
         }
         if (verbose >= 6) console.log(msgObject);

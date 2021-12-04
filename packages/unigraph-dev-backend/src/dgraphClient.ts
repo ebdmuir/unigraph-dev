@@ -159,8 +159,11 @@ export default class DgraphClient {
     //return ["0x" + getRandomInt().toString()];
     return data.mutations.map((el, index) => {
       let targetUid = `upsert${index}`;
+      //console.log(el.uid, targetUid, response.getUidsMap(), response.getJson())
       if (el.uid) {
-        if (el.uid.startsWith('_:')) targetUid = el.uid.slice(2);
+        if (el.uid.startsWith('0x')) return el.uid;
+        else if (el.uid.startsWith('_:')) targetUid = el.uid.slice(2);
+        else if (el.uid.startsWith('uid(') && response.getUidsMap().get(el.uid)) targetUid = el.uid
         else if (el.uid.startsWith('uid(')) return response.getJson()?.["uidreq" +el.uid.slice(4, -1)]?.[0]?.uid;
         else targetUid = el.uid
       }
@@ -331,17 +334,22 @@ export default class DgraphClient {
   `, {})
   }
 
-  async deleteUnigraphObject(uid: string) {
-    return this.createData({
-      uid: uid,
-      "dgraph.type": "Deleted"
-    })
-  }
-
-  async deleteUnigraphObjectPermanently(uid: string) {
+  async deleteUnigraphObject(uid: string[]) {
     const txn = this.dgraphClient.newTxn({readOnly: false});
     const mu = new dgraph.Mutation();
-    mu.setDeleteJson({uid: uid});
+    mu.setSetNquads(uid.map(el => `<${el}> <dgraph.type> "Deleted" .`).join('\n'));
+    const req = new dgraph.Request();
+    req.setMutationsList([mu]);
+    req.setCommitNow(true);
+    return await withLock(this.txnlock, 'txn', () => txn.doRequest(req));;
+  }
+
+  async deleteUnigraphObjectPermanently(uid: string[]) {
+    const txn = this.dgraphClient.newTxn({readOnly: false});
+    const mu = new dgraph.Mutation();
+    mu.setDelNquads(uid.map(el => `<${el}> * * .
+<${el}> <~unigraph.origin> * .
+<${el}> <unigraph.origin> * .`).join('\n'));
     const req = new dgraph.Request();
     req.setMutationsList([mu]);
     req.setCommitNow(true);
@@ -368,13 +376,13 @@ export const queries: Record<string, (a: string, uidsOnly?: boolean) => string> 
       }
       cca${a} as min(val(ca${a}))
     }`,
-  "queryAnyAll": (a: any, uidsOnly?: boolean) => `(func: uid(es${a}), orderdesc: val(cca${a})) ${uidsOnly ? "{uid}" : `@recurse {
+  "queryAnyAll": (a: any, uidsOnly?: boolean) => `(func: uid(es${a}), orderdesc: val(cca${a}), first: -1000) ${uidsOnly ? "{uid}" : `@recurse {
       uid
       unigraph.id
       expand(_userpredicate_)
     }`}
     
-    es${a} as var(func: type(Entity)) @filter((NOT eq(<_propertyType>, "inheritance")) AND (NOT eq(<_hide>, true)))
+    es${a} as var(func: type(Entity), first: -1000) @filter((NOT eq(<_propertyType>, "inheritance")) AND (NOT eq(<_hide>, true)))
       { 
         _timestamp {
           ca${a} as _updatedAt
